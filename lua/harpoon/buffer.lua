@@ -83,6 +83,83 @@ function M.setup_autocmds_and_keymaps(bufnr)
     })
 end
 
+function M.setup_autocmds_and_keymaps_split(bufnr)
+    local curr_file = vim.api.nvim_buf_get_name(0)
+    local cmd = string.format(
+        "autocmd Filetype harpoon "
+            .. "let path = '%s' | call clearmatches() | "
+            -- move the cursor to the line containing the current filename
+            .. "call search('\\V'.path.'\\$') | "
+            -- add a hl group to that line
+            .. "call matchadd('HarpoonCurrentFile', '\\V'.path.'\\$')",
+        curr_file:gsub("\\", "\\\\")
+    )
+    vim.cmd(cmd)
+
+    if vim.api.nvim_buf_get_name(bufnr) == "" then
+        vim.api.nvim_buf_set_name(bufnr, get_harpoon_menu_name())
+    end
+
+    vim.api.nvim_set_option_value("filetype", "harpoon", {
+        buf = bufnr,
+    })
+    vim.api.nvim_set_option_value("buftype", "acwrite", { buf = bufnr })
+
+    vim.keymap.set("n", "q", function()
+        M.run_toggle_command("q")
+    end, { buffer = bufnr, silent = true })
+
+    -- vim.keymap.set("n", "<Esc>", function()
+    --     M.run_toggle_command("Esc")
+    -- end, { buffer = bufnr, silent = true })
+
+    vim.keymap.set("n", "<CR>", function()
+        M.run_select_command()
+    end, { buffer = bufnr, silent = true })
+
+    vim.api.nvim_create_autocmd({ "BufWriteCmd" }, {
+        group = HarpoonGroup,
+        buffer = bufnr,
+        callback = function()
+            -- require("harpoon").ui:save()
+            require("harpoon").ui_split:refresh_content_split()
+            -- require("harpoon"):sync()
+            vim.schedule(function()
+                require("harpoon").logger:log("toggle by BufWriteCmd")
+                -- TODO add option for this
+                -- require("harpoon").ui:toggle_quick_menu()
+            end)
+        end,
+    })
+
+    vim.api.nvim_create_autocmd({ "BufLeave" }, {
+        group = HarpoonGroup,
+        buffer = bufnr,
+        callback = function()
+            require("harpoon").logger:log("toggle by BufLeave")
+            -- require("harpoon").ui:toggle_quick_menu()
+            -- require("harpoon").ui:save()
+            -- require("harpoon"):sync()
+        end,
+    })
+    vim.api.nvim_create_autocmd({ "BufWinLeave" }, {
+        group = HarpoonGroup,
+        buffer = bufnr,
+        callback = function()
+            require("harpoon").logger:log("toggle by BufLeave split")
+            require("harpoon").ui_split:split_close()
+        end,
+    })
+    vim.api.nvim_create_autocmd({ "BufEnter" }, {
+        group = HarpoonGroup,
+        buffer = bufnr,
+        callback = function()
+            require("harpoon").logger:log("toggle by BufEnter split")
+            require("harpoon").ui_split:refresh_content_split()
+            -- require("harpoon"):sync()
+        end,
+    })
+end
 ---@param bufnr number
 function M.get_contents(bufnr)
     local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, true)

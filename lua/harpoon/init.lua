@@ -1,5 +1,6 @@
 local Log = require("harpoon.logger")
 local Ui = require("harpoon.ui")
+local UiSplit = require("harpoon.ui-split")
 local Data = require("harpoon.data")
 local Config = require("harpoon.config")
 local List = require("harpoon.list")
@@ -9,6 +10,7 @@ local HarpoonGroup = require("harpoon.autocmd")
 ---@class Harpoon
 ---@field config HarpoonConfig
 ---@field ui HarpoonUI
+---@field ui_split HarpoonUISplit
 ---@field _extensions HarpoonExtensions
 ---@field data HarpoonData
 ---@field logger HarpoonLog
@@ -44,6 +46,7 @@ function Harpoon:new()
         data = Data.Data:new(config),
         logger = Log,
         ui = Ui:new(config.settings),
+        ui_split = UiSplit:new(config.settings),
         _extensions = Extensions.extensions,
         lists = {},
         hooks_setup = false,
@@ -147,6 +150,7 @@ function Harpoon.setup(self, partial_config)
     ---@diagnostic disable-next-line: param-type-mismatch
     self.config = Config.merge_config(partial_config, self.config)
     self.ui:configure(self.config.settings)
+    self.ui_split:configure(self.config.settings)
     self._extensions:emit(Extensions.event_names.SETUP_CALLED, self.config)
 
     ---TODO: should we go through every seen list and update its config?
