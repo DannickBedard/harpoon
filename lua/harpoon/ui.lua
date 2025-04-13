@@ -21,9 +21,12 @@ end
 
 ---@class HarpoonUI
 ---@field win_id number
+---@field split_win_id number
 ---@field bufnr number
+---@field split_bufnr number
 ---@field settings HarpoonSettings
 ---@field active_list HarpoonList
+---@field split_active_list HarpoonList
 local HarpoonUI = {}
 
 ---@param list HarpoonList
@@ -39,12 +42,14 @@ HarpoonUI.__index = HarpoonUI
 function HarpoonUI:new(settings)
     return setmetatable({
         win_id = nil,
+        split_win_id = nil,
         bufnr = nil,
+        split_bufnr = nil,
         active_list = nil,
+        split_active_list = nil,
         settings = settings,
     }, self)
 end
-
 function HarpoonUI:close_menu()
     if self.closing then
         return
@@ -74,6 +79,52 @@ function HarpoonUI:close_menu()
     self.bufnr = nil
 
     self.closing = false
+end
+
+function HarpoonUI:split_close()
+    if self.split_closing then
+        return
+    end
+
+    self.split_closing = true
+    Logger:log(
+        "ui#split_close name: ",
+        list_name(self.split_active_list),
+        "win and bufnr",
+        {
+            win = self.split_win_id,
+            bufnr = self.split_bufnr,
+        }
+    )
+
+    -- if self.bufnr ~= nil and vim.api.nvim_buf_is_valid(self.bufnr) then
+    --     vim.api.nvim_buf_delete(self.bufnr, { force = true })
+    -- end
+
+    -- if self.win_id ~= nil and vim.api.nvim_win_is_valid(self.win_id) then
+    --     vim.api.nvim_win_close(self.win_id, true)
+    -- end
+    local win_id = self.split_win_id
+    local bufnr = self.split_bufnr
+    self.split_active_list = nil
+    self.split_win_id = nil
+    self.split_bufnr = nil
+
+   -- Use vim.schedule to defer the buffer deletion to after the current event
+    vim.schedule(function()
+        if win_id ~= nil and vim.api.nvim_win_is_valid(win_id) then
+            pcall(vim.api.nvim_win_close, win_id, true)
+        end
+
+        -- Give it a small delay before trying to delete the buffer
+        vim.defer_fn(function()
+            if bufnr ~= nil and vim.api.nvim_buf_is_valid(bufnr) then
+                pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
+            end
+        end, 10) -- 10ms delay
+    end)
+
+    self.split_closing = false
 end
 
 --- TODO: Toggle_opts should be where we get extra style and border options
@@ -128,15 +179,72 @@ function HarpoonUI:_create_window(toggle_opts)
     return win_id, bufnr
 end
 
+function HarpoonUI:_create_side_split(toggle_opts)
+    local win = vim.api.nvim_list_uis()
+    -- Default width for the side split - can be adjusted in toggle_opts
+    local width = toggle_opts.split_width or 40
+
+    -- Create a new buffer
+    local bufnr = vim.api.nvim_create_buf(false, true)
+
+    -- Create a vertical split on the right
+    vim.cmd("botright vertical split")
+
+    -- Resize the split to the desired width
+    vim.cmd("vertical resize " .. width)
+
+    -- Get the window ID of the newly created split
+    local win_id = vim.api.nvim_get_current_win()
+
+    -- Set the buffer in the new window
+    vim.api.nvim_win_set_buf(win_id, bufnr)
+
+    -- Set up the buffer with autocmds and keymaps
+    Buffer.setup_autocmds_and_keymaps_split(bufnr)
+
+    -- Set window options
+    vim.api.nvim_set_option_value("number", true, {
+        win = win_id,
+    })
+
+    -- Additional options you might want to set
+    if toggle_opts.set_split_options then
+        vim.api.nvim_set_option_value("winfixwidth", true, {
+            win = win_id,
+        })
+    end
+
+    -- Ensure the buffer stays open
+    vim.api.nvim_buf_set_option(bufnr, "bufhidden", "hide")
+
+    -- Set window options
+    vim.api.nvim_set_option_value("number", false, { win = win_id }) -- Disable line numbers
+
+    if toggle_opts.set_split_options then
+        vim.api.nvim_set_option_value("winfixwidth", true, { win = win_id })
+    end
+
+    -- Highlight a specific line (e.g., 3rd line)
+    local ns_id = vim.api.nvim_create_namespace("harpoon_highlight")
+    vim.api.nvim_buf_add_highlight(bufnr, ns_id, "IncSearch", 2, 0, -1) -- Adjust index (0-based)
+
+    -- Store window and buffer IDs
+    self.win_id = win_id
+    self.bufnr = bufnr
+
+    return win_id, bufnr
+end
+
 ---@param list? HarpoonList
 ---TODO: @param opts? HarpoonToggleOptions
-function HarpoonUI:toggle_quick_menu(list, opts)
+function HarpoonUI:toggle_quick_menu(list, opts, split)
     opts = toggle_config(opts)
     if list == nil or self.win_id ~= nil then
         Logger:log("ui#toggle_quick_menu#closing", list and list.name)
         if self.settings.save_on_toggle then
             self:save()
         end
+        print("toggling quickmenue...")
         self:close_menu()
         return
     end
@@ -146,6 +254,10 @@ function HarpoonUI:toggle_quick_menu(list, opts)
 
     Logger:log("ui#toggle_quick_menu#opening", list and list.name)
     local win_id, bufnr = self:_create_window(opts)
+
+    if split then
+        win_id, bufnr = self:_create_side_split(opts)
+    end
 
     self.win_id = win_id
     self.bufnr = bufnr
@@ -163,6 +275,68 @@ function HarpoonUI:toggle_quick_menu(list, opts)
     })
 end
 
+function HarpoonUI:toggle_split(list, opts)
+    opts = toggle_config(opts)
+    if list == nil or self.split_win_id ~= nil then
+        Logger:log("ui#toggle_quick_menu#closing", list and list.name)
+        if self.settings.save_on_toggle then
+            -- self:save()
+        end
+        print("toggling split...")
+        self:split_close()
+        return
+    end
+
+    -- grab the current file before opening the quick menu
+    local current_file = vim.api.nvim_buf_get_name(0)
+
+    Logger:log("ui#toggle_quick_menu#opening", list and list.name)
+    local win_id, bufnr = self:_create_side_split(opts)
+
+    self.split_win_id = win_id
+    self.split_bufnr = bufnr
+    self.split_active_list = list
+
+    local contents = self.split_active_list:display()
+
+    vim.api.nvim_buf_set_lines(self.split_bufnr, 0, -1, false, contents)
+
+    Extensions.extensions:emit(Extensions.event_names.UI_CREATE, {
+        win_id = self.win_id,
+        bufnr = self.bufnr,
+        current_file = current_file,
+        contents = contents,
+    })
+end
+
+function HarpoonUI:refresh_content()
+
+    local current_file = vim.api.nvim_buf_get_name(0)
+    local contents = self.active_list:display()
+
+    vim.api.nvim_buf_set_lines(self.bufnr, 0, -1, false, contents)
+
+    Extensions.extensions:emit(Extensions.event_names.UI_CREATE, {
+        win_id = self.win_id,
+        bufnr = self.bufnr,
+        current_file = current_file,
+        contents = contents,
+    })
+end
+function HarpoonUI:refresh_content_split()
+
+    local current_file = vim.api.nvim_buf_get_name(0)
+    local contents = self.split_active_list:display()
+
+    vim.api.nvim_buf_set_lines(self.split_bufnr, 0, -1, false, contents)
+
+    Extensions.extensions:emit(Extensions.event_names.UI_CREATE, {
+        win_id = self.split_win_id,
+        bufnr = self.split_bufnr,
+        current_file = current_file,
+        contents = contents,
+    })
+end
 function HarpoonUI:_get_processed_ui_contents()
     local list = Buffer.get_contents(self.bufnr)
     local length = #list
@@ -188,7 +362,7 @@ function HarpoonUI:select_menu_item(options)
     )
 
     list = self.active_list
-    self:close_menu()
+    -- self:close_menu()
     list:select(idx, options)
 end
 
